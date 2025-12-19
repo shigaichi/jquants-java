@@ -69,7 +69,7 @@ public final class ListedInfoQuery {
             if (value == null) {
                 return null;
             }
-            String trimmed = value.trim();
+            String trimmed = value.strip();
             return trimmed.isEmpty() ? null : trimmed;
         }
     }

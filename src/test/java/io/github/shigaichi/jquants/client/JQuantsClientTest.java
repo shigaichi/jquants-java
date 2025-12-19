@@ -1,5 +1,6 @@
 package io.github.shigaichi.jquants.client;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -100,6 +101,32 @@ class JQuantsClientTest {
     }
 
     @Test
+    @DisplayName("引数がnullの場合は全件取得となり、リクエストが正しく組み立てられる")
+    void fetchListedInfoWithNullQuery() throws Exception {
+        String responseBody = "{\"info\": [], \"pagination_key\": null}";
+
+        HttpResponse<String> httpResponse = mock(HttpResponse.class);
+        when(httpResponse.statusCode()).thenReturn(200);
+        when(httpResponse.body()).thenReturn(responseBody);
+
+        HttpRequestExecutor executor = mock(HttpRequestExecutor.class);
+        when(executor.send(any())).thenReturn(httpResponse);
+
+        JQuantsClient client =
+                new JQuantsClient("dummy-token", JQuantsClient.DEFAULT_BASE_URI, executor);
+
+        // 他のテストで実施しているためレスポンスの検証はしない
+        client.getListedInfo(null);
+
+        ArgumentCaptor<HttpRequest> requestCaptor = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(executor).send(requestCaptor.capture());
+        HttpRequest lastRequest = requestCaptor.getValue();
+        assertEquals(JQuantsClient.DEFAULT_BASE_URL + "/listed/info", lastRequest.uri().toString());
+        assertEquals(
+                "Bearer dummy-token", lastRequest.headers().firstValue("Authorization").orElse(""));
+    }
+
+    @Test
     @DisplayName("エラー応答の場合に例外をスローする")
     void throwExceptionOnErrorResponse() throws IOException, InterruptedException {
         String responseBody = "{\"message\":\"無効なリクエスト\"}";
@@ -116,8 +143,29 @@ class JQuantsClientTest {
         ListedInfoQuery query = ListedInfoQuery.builder().build();
         JQuantsApiException exception =
                 assertThrows(JQuantsApiException.class, () -> client.getListedInfo(query));
-        assertTrue(exception.getMessage().contains("status=400"));
-        assertTrue(exception.getMessage().contains("無効なリクエスト"));
+        assertThat(exception.getMessage()).contains("status=400");
+        assertThat(exception.getMessage()).contains("無効なリクエスト");
+    }
+
+    @Test
+    @DisplayName("レスポンスがJSONでなかった場合はそのままbodyを返す")
+    void throwExceptionOnNonJsonResponse() throws IOException, InterruptedException {
+        String responseBody = "NON_JSON_RESPONSE";
+        HttpResponse<String> httpResponse = mock(HttpResponse.class);
+        when(httpResponse.statusCode()).thenReturn(400);
+        when(httpResponse.body()).thenReturn(responseBody);
+
+        HttpRequestExecutor executor = mock(HttpRequestExecutor.class);
+        when(executor.send(any())).thenReturn(httpResponse);
+
+        JQuantsClient client =
+                new JQuantsClient("dummy-token", JQuantsClient.DEFAULT_BASE_URI, executor);
+
+        ListedInfoQuery query = ListedInfoQuery.builder().build();
+        JQuantsApiException exception =
+                assertThrows(JQuantsApiException.class, () -> client.getListedInfo(query));
+        assertThat(exception.getMessage()).contains("status=400");
+        assertThat(exception.getMessage()).contains("NON_JSON_RESPONSE");
     }
 
     @Test
@@ -287,5 +335,40 @@ class JQuantsClientTest {
                         });
         latch.await();
         return builder.toString();
+    }
+
+    @Test
+    @DisplayName("authenticateUser: メールアドレス/パスワードが null/空文字の場合に IllegalArgumentException を送出する")
+    void authenticateUserThrowIllegalArgumentExceptionWithInvalidInputs() {
+        // mailAddress が null/空文字
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> JQuantsClient.authenticateUser(null, "password"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> JQuantsClient.authenticateUser("", "password"));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> JQuantsClient.authenticateUser("   ", "password"));
+
+        // password が null/空文字
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> JQuantsClient.authenticateUser("user@example.com", null));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> JQuantsClient.authenticateUser("user@example.com", ""));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> JQuantsClient.authenticateUser("user@example.com", "   "));
+    }
+
+    @Test
+    @DisplayName("refreshIdToken: refreshToken が null/空文字の場合に IllegalArgumentException を送出する")
+    void refreshIdTokenThrowIllegalArgumentExceptionWithInvalidInputs() {
+        // refreshToken が null/空文字
+        assertThrows(IllegalArgumentException.class, () -> JQuantsClient.refreshIdToken(null));
+        assertThrows(IllegalArgumentException.class, () -> JQuantsClient.refreshIdToken(""));
+        assertThrows(IllegalArgumentException.class, () -> JQuantsClient.refreshIdToken("   "));
     }
 }

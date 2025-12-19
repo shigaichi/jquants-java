@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.StringJoiner;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  * J-Quants API クライアント。
@@ -29,7 +30,7 @@ public class JQuantsClient {
     private final String idToken;
     private final URI baseUri;
     private final HttpRequestExecutor requestExecutor;
-    private final ObjectMapper objectMapper;
+    private static final ObjectMapper OBJECT_MAPPER = createObjectMapper();
 
     public JQuantsClient(String idToken) {
         this(idToken, HttpClient.newHttpClient(), DEFAULT_BASE_URI);
@@ -40,10 +41,9 @@ public class JQuantsClient {
     }
 
     JQuantsClient(String idToken, URI baseUri, HttpRequestExecutor requestExecutor) {
-        this.idToken = requireToken(idToken);
+        this.idToken = requireNonEmpty(idToken, "idToken");
         this.baseUri = normalizeBaseUri(baseUri);
         this.requestExecutor = Objects.requireNonNull(requestExecutor, "requestExecutor");
-        this.objectMapper = createObjectMapper();
     }
 
     /**
@@ -62,7 +62,7 @@ public class JQuantsClient {
     }
 
     /**
-     * メールアドレスとパスワードを用いて ID トークンとリフレッシュトークンを取得します。
+     * メールアドレスとパスワードを用いて ID トークンとリフレッシュトークンを取得します（ベースURLを変更したい場合）。
      *
      * @param mailAddress 登録メールアドレス
      * @param password パスワード
@@ -74,26 +74,24 @@ public class JQuantsClient {
      */
     public static IdTokenResponse authenticateUser(String mailAddress, String password, URI baseUri)
             throws IOException, InterruptedException {
-        return authenticateUser(
-                mailAddress,
-                password,
-                normalizeBaseUri(baseUri),
-                new HttpClientRequestExecutor(HttpClient.newHttpClient()));
+        HttpRequestExecutor requestExecutor =
+                new HttpClientRequestExecutor(HttpClient.newHttpClient());
+        return authenticateUser(mailAddress, password, baseUri, requestExecutor);
     }
 
     static IdTokenResponse authenticateUser(
             String mailAddress, String password, URI baseUri, HttpRequestExecutor requestExecutor)
             throws IOException, InterruptedException {
-        String validatedMailAddress = requireMailAddress(mailAddress);
-        String validatedPassword = requirePassword(password);
+        String validatedMailAddress = requireNonEmpty(mailAddress, "mailaddress");
+        String validatedPassword = requireNonEmpty(password, "password");
         Objects.requireNonNull(requestExecutor, "requestExecutor");
+        URI normalizedBaseUri = normalizeBaseUri(baseUri);
 
-        URI uri = buildUri(normalizeBaseUri(baseUri), "/token/auth_user");
-        ObjectMapper mapper = createObjectMapper();
+        URI uri = buildUri(normalizedBaseUri, "token/auth_user");
         Map<String, String> requestBody = new LinkedHashMap<>();
         requestBody.put("mailaddress", validatedMailAddress);
         requestBody.put("password", validatedPassword);
-        String body = mapper.writeValueAsString(requestBody);
+        String body = OBJECT_MAPPER.writeValueAsString(requestBody);
 
         HttpRequest request =
                 HttpRequest.newBuilder()
@@ -104,22 +102,23 @@ public class JQuantsClient {
 
         HttpResponse<String> response = requestExecutor.send(request);
         if (response.statusCode() != 200) {
-            throw buildException(response, mapper);
+            throw buildException(response);
         }
 
-        IdTokenResponse tokenResponse = mapper.readValue(response.body(), IdTokenResponse.class);
+        IdTokenResponse tokenResponse =
+                OBJECT_MAPPER.readValue(response.body(), IdTokenResponse.class);
         String issuedIdToken = tokenResponse.getIdToken();
         String refreshToken = tokenResponse.getRefreshToken();
 
-        if (isBlank(issuedIdToken)) {
-            if (isBlank(refreshToken)) {
+        if (StringUtils.isBlank(issuedIdToken)) {
+            if (StringUtils.isBlank(refreshToken)) {
                 throw new JQuantsApiException("IDトークンの取得に失敗しました。", response.statusCode());
             }
-            String renewedToken = refreshIdToken(refreshToken, baseUri, requestExecutor);
+            String renewedToken = refreshIdToken(refreshToken, normalizedBaseUri, requestExecutor);
             tokenResponse.setIdToken(renewedToken);
         }
 
-        if (isBlank(tokenResponse.getRefreshToken())) {
+        if (StringUtils.isBlank(tokenResponse.getRefreshToken())) {
             throw new JQuantsApiException("リフレッシュトークンの取得に失敗しました。", response.statusCode());
         }
         return tokenResponse;
@@ -151,33 +150,30 @@ public class JQuantsClient {
      */
     public static String refreshIdToken(String refreshToken, URI baseUri)
             throws IOException, InterruptedException {
-        return refreshIdToken(
-                refreshToken,
-                normalizeBaseUri(baseUri),
-                new HttpClientRequestExecutor(HttpClient.newHttpClient()));
+        HttpRequestExecutor requestExecutor =
+                new HttpClientRequestExecutor(HttpClient.newHttpClient());
+        return refreshIdToken(refreshToken, baseUri, requestExecutor);
     }
 
     static String refreshIdToken(
             String refreshToken, URI baseUri, HttpRequestExecutor requestExecutor)
             throws IOException, InterruptedException {
-        String validatedToken = requireRefreshToken(refreshToken);
+        String validatedToken = requireNonEmpty(refreshToken, "refreshtoken");
         Objects.requireNonNull(requestExecutor, "requestExecutor");
-        URI uri =
-                buildUri(
-                        normalizeBaseUri(baseUri),
-                        "/token/auth_refresh?refreshtoken="
-                                + URLEncoder.encode(validatedToken, StandardCharsets.UTF_8));
-        ObjectMapper mapper = createObjectMapper();
+        URI normalizedBaseUri = normalizeBaseUri(baseUri);
+        Map<String, String> params = Map.of("refreshtoken", validatedToken);
+        URI uri = buildUri(normalizedBaseUri, "token/auth_refresh", params);
 
         HttpRequest request =
                 HttpRequest.newBuilder().uri(uri).POST(HttpRequest.BodyPublishers.noBody()).build();
         HttpResponse<String> response = requestExecutor.send(request);
         if (response.statusCode() != 200) {
-            throw buildException(response, mapper);
+            throw buildException(response);
         }
 
-        IdTokenResponse tokenResponse = mapper.readValue(response.body(), IdTokenResponse.class);
-        if (tokenResponse.getIdToken() == null || tokenResponse.getIdToken().trim().isEmpty()) {
+        IdTokenResponse tokenResponse =
+                OBJECT_MAPPER.readValue(response.body(), IdTokenResponse.class);
+        if (StringUtils.isBlank(tokenResponse.getIdToken())) {
             throw new JQuantsApiException("IDトークンの取得に失敗しました。", response.statusCode());
         }
         return tokenResponse.getIdToken();
@@ -205,13 +201,16 @@ public class JQuantsClient {
         if (response.statusCode() != 200) {
             throw buildException(response);
         }
-        return objectMapper.readValue(response.body(), ListedInfoResponse.class);
+        return OBJECT_MAPPER.readValue(response.body(), ListedInfoResponse.class);
     }
 
-    private JQuantsApiException buildException(HttpResponse<String> response) {
-        return buildException(response, objectMapper);
-    }
-
+    /**
+     * baseUri を基準にパスとクエリを組み立てます。
+     *
+     * @param path 結合するパス
+     * @param query クエリパラメータ
+     * @return 組み立てた URI
+     */
     private URI buildUri(String path, ListedInfoQuery query) {
         Map<String, String> params = new LinkedHashMap<>();
         ListedInfoQuery effectiveQuery = query == null ? ListedInfoQuery.builder().build() : query;
@@ -219,54 +218,35 @@ public class JQuantsClient {
         effectiveQuery.getDate().ifPresent(v -> params.put("date", v));
         effectiveQuery.getPaginationKey().ifPresent(v -> params.put("pagination_key", v));
 
-        StringBuilder builder = buildUri(baseUri, path, false);
-
-        if (!params.isEmpty()) {
-            StringJoiner joiner = new StringJoiner("&", "?", "");
-            for (Map.Entry<String, String> entry : params.entrySet()) {
-                joiner.add(encode(entry.getKey()) + "=" + encode(entry.getValue()));
-            }
-            builder.append(joiner);
-        }
-
-        return URI.create(builder.toString());
+        return buildUri(path, params);
     }
 
-    private String encode(String value) {
+    /**
+     * baseUri を基準にパスと任意のクエリパラメータを結合します。
+     *
+     * @param path 結合するパス
+     * @param params 付与するクエリパラメータ
+     * @return 組み立てた URI
+     */
+    private URI buildUri(String path, Map<String, String> params) {
+        return buildUri(baseUri, path, params);
+    }
+
+    private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
-    private static URI normalizeBaseUri(URI uri) {
-        Objects.requireNonNull(uri, "baseUri");
-        if (uri.toString().endsWith("/")) {
-            return uri;
-        }
-        return URI.create(uri.toString());
-    }
-
-    private static boolean isBlank(String value) {
-        return value == null || value.trim().isEmpty();
-    }
-
-    private static String requireToken(String token) {
-        return requireNonEmpty(token, "idTokenが指定されていません。");
-    }
-
-    private static String requireRefreshToken(String token) {
-        return requireNonEmpty(token, "refreshtokenが指定されていません。");
-    }
-
-    private static String requireMailAddress(String mailAddress) {
-        return requireNonEmpty(mailAddress, "mailaddressが指定されていません。");
-    }
-
-    private static String requirePassword(String password) {
-        return requireNonEmpty(password, "passwordが指定されていません。");
-    }
-
-    private static String requireNonEmpty(String value, String message) {
-        if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException(message);
+    /**
+     * null/空/空白のみを拒否し、フィールド名付きで例外を送出します。
+     *
+     * @param value 検証する文字列
+     * @param fieldName フィールド名
+     * @return 元の値
+     * @throws IllegalArgumentException value が空の場合
+     */
+    private static String requireNonEmpty(String value, String fieldName) {
+        if (StringUtils.isBlank(value)) {
+            throw new IllegalArgumentException(fieldName + "が指定されていません。");
         }
         return value;
     }
@@ -277,41 +257,71 @@ public class JQuantsClient {
         return mapper;
     }
 
-    private static JQuantsApiException buildException(
-            HttpResponse<String> response, ObjectMapper mapper) {
-        String message = parseErrorMessage(response.body(), mapper).orElse("API呼び出しに失敗しました。");
+    private static JQuantsApiException buildException(HttpResponse<String> response) {
+        String message = parseErrorMessage(response.body()).orElse("API呼び出しに失敗しました。");
         String detailedMessage =
                 String.format("status=%d, message=%s", response.statusCode(), message);
         return new JQuantsApiException(detailedMessage, response.statusCode());
     }
 
-    private static Optional<String> parseErrorMessage(String body, ObjectMapper mapper) {
+    private static Optional<String> parseErrorMessage(String body) {
         try {
-            Map<?, ?> parsed = mapper.readValue(body, Map.class);
+            Map<?, ?> parsed = OBJECT_MAPPER.readValue(body, Map.class);
             Object message = parsed.get("message");
             if (message != null) {
                 return Optional.of(String.valueOf(message));
             }
         } catch (JsonProcessingException ignored) {
             // エラー時はボディをそのまま返す
+            return Optional.ofNullable(body).filter(b -> !b.isBlank());
         }
         return Optional.empty();
     }
 
-    private static URI buildUri(URI normalizedBase, String path) {
-        return URI.create(buildUri(normalizedBase, path, true).toString());
+    /**
+     * 正規化済み baseUri に対してパスを解決します。
+     *
+     * @param normalizedBaseUri 末尾スラッシュ付きのベース URI
+     * @param path 結合するパス
+     * @return 組み立てた URI
+     */
+    private static URI buildUri(URI normalizedBaseUri, String path) {
+        String normalizedPath = path.startsWith("/") ? path.substring(1) : path;
+        return normalizedBaseUri.resolve(normalizedPath);
     }
 
-    private static StringBuilder buildUri(URI normalizedBase, String path, boolean ensureRoot) {
-        StringBuilder builder = new StringBuilder(normalizedBase.toString());
-        if (!builder.toString().endsWith("/")) {
-            builder.append('/');
+    /**
+     * 正規化済み baseUri に対してパスとクエリパラメータを結合します。
+     *
+     * @param normalizedBaseUri 末尾スラッシュ付きのベース URI
+     * @param path 結合するパス
+     * @param params 付与するクエリパラメータ
+     * @return 組み立てた URI
+     */
+    private static URI buildUri(URI normalizedBaseUri, String path, Map<String, String> params) {
+        URI uri = buildUri(normalizedBaseUri, path);
+        if (params.isEmpty()) {
+            return uri;
         }
-        String normalizedPath = path.startsWith("/") ? path.substring(1) : path;
-        if (ensureRoot && normalizedPath.isEmpty()) {
-            return builder;
+        StringBuilder builder = new StringBuilder(uri.toString());
+        StringJoiner joiner = new StringJoiner("&", "?", "");
+        params.forEach((key, value) -> joiner.add(encode(key) + "=" + encode(value)));
+        builder.append(joiner);
+        return URI.create(builder.toString());
+    }
+
+    /**
+     * ベース URI を正規化し、末尾スラッシュを保証します。
+     *
+     * @param uri 元の URI
+     * @return 末尾スラッシュ付きの URI
+     */
+    private static URI normalizeBaseUri(URI uri) {
+        Objects.requireNonNull(uri, "baseUri");
+        String value = uri.toString();
+        if (!value.endsWith("/")) {
+            value = value + "/";
         }
-        builder.append(normalizedPath);
-        return builder;
+        return URI.create(value);
     }
 }

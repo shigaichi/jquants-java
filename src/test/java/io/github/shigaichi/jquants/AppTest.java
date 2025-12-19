@@ -2,6 +2,7 @@ package io.github.shigaichi.jquants;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -13,6 +14,7 @@ public class AppTest {
      * Rigorous Test :-)
      */
     @Test
+    @DisplayName("デフォルトのサンプルテスト")
     public void shouldAnswerWithTrue() {
         assertTrue(true);
     }
